@@ -1,1 +1,261 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gravité artificielle : simulateur de station en rotation</title>
+<style>
+  :root {
+    --bg: #0e1117; --panel: #161b24; --line: #2a3242; --text: #e6e9ef;
+    --muted: #9aa3b2; --accent: #6cb4ff; --warm: #ff9d5c; --good: #5fd39a; --bad: #ff6b6b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  header { padding: 28px 24px 8px; max-width: 1100px; margin: 0 auto; }
+  h1 { margin: 0 0 6px; font-size: 1.6rem; }
+  header p { margin: 0; color: var(--muted); }
+  main {
+    max-width: 1100px; margin: 0 auto; padding: 16px 24px 40px;
+    display: grid; grid-template-columns: minmax(300px, 1fr) minmax(300px, 1fr); gap: 24px;
+  }
+  @media (max-width: 820px) { main { grid-template-columns: 1fr; } }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px; }
+  canvas { width: 100%; aspect-ratio: 1; display: block; }
+  .controls label { display: block; margin: 14px 0 4px; font-weight: 600; }
+  .controls label span { float: right; font-weight: 400; color: var(--accent); font-variant-numeric: tabular-nums; }
+  input[type=range] { width: 100%; accent-color: var(--accent); }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
+  button {
+    background: #222a38; color: var(--text); border: 1px solid var(--line);
+    border-radius: 8px; padding: 7px 12px; cursor: pointer; font: inherit; font-size: .9rem;
+  }
+  button:hover { border-color: var(--accent); }
+  h2 { font-size: 1.05rem; margin: 22px 0 8px; }
+  h2:first-child { margin-top: 0; }
+  .metric { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--line); }
+  .metric b { font-variant-numeric: tabular-nums; }
+  .bar { height: 10px; background: #222a38; border-radius: 5px; overflow: hidden; margin: 4px 0 2px; }
+  .bar > div { height: 100%; border-radius: 5px; transition: width .2s; }
+  .note { color: var(--muted); font-size: .9rem; }
+  .verdict { margin-top: 14px; padding: 10px 12px; border-radius: 8px; font-weight: 600; }
+  .ok { background: rgba(95,211,154,.12); color: var(--good); }
+  .warn { background: rgba(255,157,92,.12); color: var(--warm); }
+  .ko { background: rgba(255,107,107,.12); color: var(--bad); }
+  .explain { grid-column: 1 / -1; }
+  .explain h3 { margin: 0 0 6px; font-size: 1rem; }
+  .explain .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 18px; }
+  .explain p { margin: 0; color: var(--muted); }
+  code { background: #222a38; padding: 1px 5px; border-radius: 4px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Gravité artificielle : simulateur de station en rotation</h1>
+  <p>Choisis le rayon et la vitesse de la station, puis observe ce que ressent un astronaute.</p>
+</header>
 
+<main>
+  <section class="panel">
+    <canvas id="scene" width="700" height="700" aria-label="Animation de la station en rotation"></canvas>
+    <p class="note">Bleu : astronaute (pieds sur le plancher, tête vers le centre). Orange : objet lâché depuis la hauteur de sa tête, vu depuis la station.</p>
+  </section>
+
+  <section class="panel">
+    <div class="controls">
+      <h2>Réglages</h2>
+      <label for="r">Rayon de la station <span id="rVal"></span></label>
+      <input id="r" type="range" min="5" max="500" step="1" value="25">
+      <label for="n">Vitesse de rotation <span id="nVal"></span></label>
+      <input id="n" type="range" min="0.5" max="10" step="0.1" value="6">
+      <label for="h">Taille de l'astronaute <span id="hVal"></span></label>
+      <input id="h" type="range" min="1.2" max="2.1" step="0.05" value="1.8">
+      <label for="v">Vitesse de marche <span id="vVal"></span></label>
+      <input id="v" type="range" min="0" max="3" step="0.1" value="1.5">
+      <div class="row">
+        <button data-preset="25,6">Petite (25 m, 6 tr/min)</button>
+        <button data-preset="224,2">Grande (224 m, 2 tr/min)</button>
+        <button data-preset="38,3">Von Braun 1952</button>
+        <button data-preset="150,1">2001 (≈ Lune)</button>
+        <button id="oneG">Ajuster pour 1 g</button>
+        <button id="drop">Lâcher un objet</button>
+      </div>
+    </div>
+
+    <h2>Gravité ressentie aux pieds</h2>
+    <div class="metric"><span>Accélération <code>a = ω²r</code></span><b id="aFeet"></b></div>
+
+    <h2>1. Tête et pieds</h2>
+    <div class="metric"><span>Gravité à la tête / aux pieds <code>1 − h/r</code></span><b id="ratio"></b></div>
+    <div class="bar"><div id="ratioBar"></div></div>
+
+    <h2>2. Marcher dans la station (effet Coriolis)</h2>
+    <div class="metric"><span>Dans le sens de la rotation</span><b id="pro"></b></div>
+    <div class="metric"><span>Dans le sens inverse</span><b id="retro"></b></div>
+    <div class="metric"><span>Écart de poids selon la direction</span><b id="swing"></b></div>
+    <div class="metric"><span>Objet lâché depuis la tête : tombe à côté de</span><b id="defl"></b></div>
+
+    <div id="verdict" class="verdict"></div>
+  </section>
+
+  <section class="panel explain">
+    <div class="cols">
+      <div>
+        <h3>Pourquoi on se sent lourd</h3>
+        <p>Le plancher pousse l'astronaute vers le centre pour l'obliger à tourner. Il ressent cette poussée comme son poids : <code>a = ω²r</code>. Plus on est loin du centre, ou plus ça tourne vite, plus on est lourd.</p>
+      </div>
+      <div>
+        <h3>La tête pèse moins que les pieds</h3>
+        <p>La tête est plus près du centre que les pieds, donc elle « pèse » moins. Dans une petite station, l'écart se sent ; dans une grande, il devient négligeable.</p>
+      </div>
+      <div>
+        <h3>Coriolis : l'est et l'ouest ne sont plus pareils</h3>
+        <p>En marchant dans le sens de la rotation, on tourne plus vite que la station : on est plus lourd. En sens inverse, on tourne moins vite : on est plus léger. Un objet lâché ne tombe pas droit, il atterrit un peu « en arrière ».</p>
+      </div>
+    </div>
+  </section>
+</main>
+
+<script>
+const G = 9.81;
+const $ = id => document.getElementById(id);
+const els = { r: $('r'), n: $('n'), h: $('h'), v: $('v') };
+const fmt = (x, d = 2) => x.toLocaleString('fr-FR', { minimumFractionDigits: d, maximumFractionDigits: d });
+
+let state = {};
+let angle = 0;          // angle de rotation de la station (rad)
+let walker = 0;         // position angulaire de l'astronaute par rapport au plancher
+let drop = null;        // objet lâché
+
+function compute() {
+  const r = +els.r.value, N = +els.n.value, h = Math.min(+els.h.value, r * 0.9), v = +els.v.value;
+  const w = 2 * Math.PI * N / 60;
+  const aFeet = w * w * r;
+  const ratio = 1 - h / r;
+  const aPro = (w * r + v) ** 2 / r;
+  const aRetro = Math.max(w * r - v, 0) ** 2 / r;
+  // Objet lâché depuis la tête : trajectoire rectiligne dans le référentiel fixe.
+  const k = Math.sqrt((r / (r - h)) ** 2 - 1);   // ω·t au moment de l'impact
+  const deflection = r * (k - Math.atan(k));      // décalage le long du plancher (m)
+  state = { r, N, h, v, w, aFeet, ratio, aPro, aRetro, k, deflection };
+}
+
+function render() {
+  const s = state;
+  $('rVal').textContent = `${s.r} m`;
+  $('nVal').textContent = `${fmt(s.N, 1)} tr/min`;
+  $('hVal').textContent = `${fmt(s.h, 2)} m`;
+  $('vVal').textContent = `${fmt(s.v, 1)} m/s`;
+  $('aFeet').textContent = `${fmt(s.aFeet)} m/s² (${fmt(s.aFeet / G)} g)`;
+  $('ratio').textContent = `${fmt(s.ratio * 100, 1)} %`;
+  const rb = $('ratioBar');
+  rb.style.width = `${Math.max(0, s.ratio) * 100}%`;
+  rb.style.background = s.ratio > 0.97 ? 'var(--good)' : s.ratio > 0.9 ? 'var(--warm)' : 'var(--bad)';
+  $('pro').textContent = `${fmt(s.aPro)} m/s² (${s.aPro >= s.aFeet ? '+' : ''}${fmt((s.aPro / s.aFeet - 1) * 100, 0)} %)`;
+  $('retro').textContent = `${fmt(s.aRetro)} m/s² (${fmt((s.aRetro / s.aFeet - 1) * 100, 0)} %)`;
+  $('swing').textContent = `± ${fmt(((s.aPro - s.aRetro) / 2) / s.aFeet * 100, 0)} %`;
+  $('defl').textContent = `${fmt(s.deflection * 100, 0)} cm`;
+
+  const vd = $('verdict');
+  const g = s.aFeet / G;
+  let msg, cls;
+  if (s.N <= 2 && s.ratio > 0.97) { cls = 'ok'; msg = 'Confortable : rotation lente et grand rayon.'; }
+  else if (s.N <= 4) { cls = 'warn'; msg = 'Supportable pour des résidents habitués, plus difficile pour des visiteurs.'; }
+  else if (s.N <= 6) { cls = 'warn'; msg = 'Limite : les personnes sensibles risquent vertiges et nausées.'; }
+  else { cls = 'ko'; msg = 'Trop rapide pour y vivre : Coriolis rend les mouvements très désagréables.'; }
+  msg += g < 0.3 ? ' Gravité faible (moins de 0,3 g).' : g > 1.2 ? ' Gravité plus forte que sur Terre.' : '';
+  vd.className = 'verdict ' + cls;
+  vd.textContent = msg;
+}
+
+function update() { compute(); render(); }
+Object.values(els).forEach(e => e.addEventListener('input', update));
+document.querySelectorAll('[data-preset]').forEach(b => b.addEventListener('click', () => {
+  const [r, n] = b.dataset.preset.split(',');
+  els.r.value = r; els.n.value = n; drop = null; update();
+}));
+$('oneG').addEventListener('click', () => {
+  const r = +els.r.value;
+  const N = Math.sqrt(G / r) * 60 / (2 * Math.PI);
+  els.n.value = Math.min(10, Math.max(0.5, N)).toFixed(1); update();
+});
+$('drop').addEventListener('click', () => {
+  // L'objet part de la tête de l'astronaute, avec la vitesse de la station à cette hauteur.
+  drop = { t: 0, start: walker };
+});
+
+// ---------- Animation ----------
+const cv = $('scene'), ctx = cv.getContext('2d');
+const SIM_SPEED = 1;   // temps réel
+let last = performance.now();
+
+function frame(now) {
+  const dt = Math.min((now - last) / 1000, 0.05); last = now;
+  const s = state;
+  angle += s.w * dt * SIM_SPEED;
+  if (s.v > 0) walker += (s.v / s.r) * dt * SIM_SPEED;   // l'astronaute marche dans le sens de la rotation
+
+  const W = cv.width, C = W / 2, R = W * 0.4;
+  const scale = R / s.r;                                  // pixels par mètre
+  const hPix = Math.max(s.h * scale, 14);                 // taille dessinée (agrandie si trop petite)
+
+  ctx.clearRect(0, 0, W, W);
+
+  // Anneau
+  ctx.save(); ctx.translate(C, C); ctx.rotate(angle);
+  ctx.strokeStyle = '#2a3242'; ctx.lineWidth = 2;
+  for (let i = 0; i < 6; i++) {
+    const a = i * Math.PI / 3;
+    ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(R * Math.cos(a), R * Math.sin(a)); ctx.stroke();
+  }
+  ctx.strokeStyle = '#6c7a93'; ctx.lineWidth = 10;
+  ctx.beginPath(); ctx.arc(0, 0, R, 0, 2 * Math.PI); ctx.stroke();
+  ctx.fillStyle = '#6c7a93'; ctx.beginPath(); ctx.arc(0, 0, 8, 0, 2 * Math.PI); ctx.fill();
+
+  // Astronaute (dans le référentiel de la station)
+  const ax = walker;
+  const fx = (R - 5) * Math.cos(ax), fy = (R - 5) * Math.sin(ax);
+  const hx = (R - 5 - hPix) * Math.cos(ax), hy = (R - 5 - hPix) * Math.sin(ax);
+  ctx.strokeStyle = '#6cb4ff'; ctx.lineWidth = 5; ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(fx, fy); ctx.lineTo(hx, hy); ctx.stroke();
+  ctx.fillStyle = '#6cb4ff'; ctx.beginPath(); ctx.arc(hx, hy, 6, 0, 2 * Math.PI); ctx.fill();
+
+  // Objet lâché : calcul exact dans le référentiel fixe puis ramené dans celui de la station
+  if (drop) {
+    drop.t += dt * SIM_SPEED;
+    const r0 = s.r - s.h;
+    const tImpact = s.k / s.w;
+    const t = Math.min(drop.t, tImpact);
+    const x = r0, y = s.w * r0 * t;                       // ligne droite (référentiel fixe, départ sur l'axe x)
+    const rho = Math.hypot(x, y);
+    const phiFixed = Math.atan2(y, x);
+    const phiStation = phiFixed - s.w * t;                // angle vu depuis la station (recule)
+    // Hauteur au-dessus du plancher mise à la même échelle que l'astronaute dessiné
+    const pr = (R - 5) - (s.r - rho) * (hPix / s.h);
+    const px = pr * Math.cos(drop.start + phiStation), py = pr * Math.sin(drop.start + phiStation);
+    ctx.fillStyle = '#ff9d5c'; ctx.beginPath(); ctx.arc(px, py, 6, 0, 2 * Math.PI); ctx.fill();
+    // Point de chute « attendu » (à la verticale du départ)
+    const ex = (R - 5) * Math.cos(drop.start), ey = (R - 5) * Math.sin(drop.start);
+    ctx.strokeStyle = '#ff9d5c'; ctx.setLineDash([4, 4]); ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(ex, ey); ctx.lineTo((R - 5 - hPix) * Math.cos(drop.start), (R - 5 - hPix) * Math.sin(drop.start)); ctx.stroke();
+    ctx.setLineDash([]);
+    if (drop.t > tImpact + 2.5) drop = null;
+  }
+  ctx.restore();
+
+  // Légende
+  ctx.fillStyle = '#9aa3b2'; ctx.font = '22px system-ui, sans-serif';
+  ctx.fillText(`r = ${s.r} m   ·   ${fmt(s.N, 1)} tr/min   ·   ${fmt(s.aFeet / G)} g`, 20, 36);
+  ctx.font = '18px system-ui, sans-serif';
+  ctx.fillText('Sens de rotation : ↻', 20, W - 20);
+
+  requestAnimationFrame(frame);
+}
+
+update();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
